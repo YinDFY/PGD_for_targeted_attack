@@ -14,9 +14,13 @@ import torch.nn.functional as F
 import Pretrained_FR_Models.irse as irse
 import Pretrained_FR_Models.facenet as facenet
 import Pretrained_FR_Models.ir152 as ir152
-device = "cuda:5"
+if torch.cuda.is_available():
+    device = torch.device("cuda")          # 如果GPU可用，则使用CUDA
+else:
+    device = torch.device("cpu")           # 如果GPU不可用，则使用CPU
+
 output_dir = "./mobile_face/"
-m = "mobile_face"
+m = ["facenet","ir152","irse50"]
 def cos_simi(emb_before_pasted, emb_target_img):
     """
     :param emb_before_pasted: feature embedding for the generated adv-makeup face images
@@ -48,7 +52,7 @@ def cal_target_loss(before_pasted, target_img,model_name):
       input_size = (160, 160)
       fr_model = facenet.InceptionResnetV1(num_classes=8631, device=device)
       fr_model.load_state_dict(torch.load('./Pretrained_FR_Models/facenet.pth'))
-    fr_model.to("cuda:5")
+    fr_model.to(device)
     fr_model.eval()
 
     before_pasted_resize = F.interpolate(before_pasted, size=input_size, mode='bilinear')
@@ -63,8 +67,8 @@ def cal_target_loss(before_pasted, target_img,model_name):
     #cos_loss.requires_grad = True
     return cos_loss
 
-
-def PGD_Attack(img_before,target,model_name,eps=0.3,alpha = 2/255,iters = 40):
+"""
+def PGD_Attack(img_before,target,model_name,eps=0.75,alpha = 2/255,iters = 40):
     ori_images = img_before
     for i in range(iters):
         img_before.requires_grad = True
@@ -73,18 +77,38 @@ def PGD_Attack(img_before,target,model_name,eps=0.3,alpha = 2/255,iters = 40):
         cosloss3 = cal_target_loss(img_before,target,"irse50")
         loss = cosloss1 + cosloss2 + cosloss3
         loss.backward()
-        adv_images = img_before + alpha*img_before.grad.sign()
-        img_before = torch.clamp(adv_images  ,min = 0,max = 1).detach()
-        eta = torch.clamp(adv_images - ori_images,min = -eps,max = eps)
-        img_before = torch.clamp(ori_images + eta ,min = 0,max = 1).detach()
+        eta = alpha * img_before.grad.sign()
+        eta = torch.clamp(eta,min = -eps,max = eps)
+        img_before = img_before + eta
     print(loss)
     return img_before
+"""
 
-def preprocess(im, mean, std, device):
-    mean = torch.tensor(mean, device=device).view(1, -1, 1, 1)
-    std = torch.tensor(std, device=device).view(1, -1, 1, 1)
-    im = (im - mean) / std
-    return im
+def PGD_Attack(img_before, target, model_names, eps=0.75, alpha=2/255, iters=40):
+    img_adv = img_before.clone().detach().requires_grad_(True)
+
+    for i in range(iters):
+        # Zero out the gradients
+        img_adv.requires_grad = True
+
+        # Calculate losses for each model
+        total_loss = 0
+        for model_name in model_names:
+            cos_loss = cal_target_loss(img_adv, target, model_name)
+            total_loss += cos_loss
+
+        # Backward and gradient calculation
+        total_loss.backward()
+
+        # Update the image
+        with torch.no_grad():
+            img_adv += alpha * img_adv.grad.sign()
+            img_adv = torch.clamp(img_adv, min=img_before - eps, max=img_before + eps)
+            img_adv = torch.clamp(img_adv, 0, 1)  # Assuming pixel values are in the range [0, 1]
+
+    return img_adv
+
+
 
 
 if __name__ == "__main__":
@@ -108,3 +132,4 @@ if __name__ == "__main__":
             img_np = attacked_img.squeeze(0).permute(1,2,0).cpu().detach().numpy()*255.0
             cv2.imwrite(output_dir+str(i) + '.png',img_np)
             i = i +1
+
