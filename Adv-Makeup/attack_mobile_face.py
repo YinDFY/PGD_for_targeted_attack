@@ -1,26 +1,19 @@
 # -*- coding: utf-8 -*-
 import cv2
-import time
-import pickle
 import os
-import shutil
-from numpy import *
-import numpy as np
-from PIL import Image, ImageDraw
 import torch
-import torchvision
-import torch.nn as nn
 import torch.nn.functional as F
 import Pretrained_FR_Models.irse as irse
 import Pretrained_FR_Models.facenet as facenet
 import Pretrained_FR_Models.ir152 as ir152
+from utils import *
 if torch.cuda.is_available():
     device = torch.device("cuda")          # 如果GPU可用，则使用CUDA
 else:
     device = torch.device("cpu")           # 如果GPU不可用，则使用CPU
 
-output_dir = "./mobile_face/"
-m = ["facenet","ir152","irse50"]
+output_dir = "./irse50/"
+m = ["facenet","mobile_face","ir152"]
 def cos_simi(emb_before_pasted, emb_target_img):
     """
     :param emb_before_pasted: feature embedding for the generated adv-makeup face images
@@ -84,9 +77,9 @@ def PGD_Attack(img_before,target,model_name,eps=0.75,alpha = 2/255,iters = 40):
     return img_before
 """
 
-def PGD_Attack(img_before, target, model_names, eps=0.75, alpha=2/255, iters=40):
+def PGD_Attack(img_before, target, model_names, eps=0.1, alpha=2/255, iters=3):
     img_adv = img_before.clone().detach().requires_grad_(True)
-
+    total_loss = 0
     for i in range(iters):
         # Zero out the gradients
         img_adv.requires_grad = True
@@ -97,6 +90,7 @@ def PGD_Attack(img_before, target, model_names, eps=0.75, alpha=2/255, iters=40)
             cos_loss = cal_target_loss(img_adv, target, model_name)
             total_loss += cos_loss
 
+
         # Backward and gradient calculation
         total_loss.backward()
 
@@ -105,12 +99,13 @@ def PGD_Attack(img_before, target, model_names, eps=0.75, alpha=2/255, iters=40)
             img_adv += alpha * img_adv.grad.sign()
             img_adv = torch.clamp(img_adv, min=img_before - eps, max=img_before + eps)
             img_adv = torch.clamp(img_adv, 0, 1)  # Assuming pixel values are in the range [0, 1]
-
+    print(total_loss.data)
     return img_adv
 
 
 
-
+avg_ssim = 0.0
+avg_psnr = 0.0
 if __name__ == "__main__":
     path = './Datasets_Makeup/before_aligned_600'
     target_img =cv2.imread("./Datasets_Makeup/target_aligned_600/Camilla_Parker_Bowles_0002.jpg")/255.0
@@ -124,12 +119,19 @@ if __name__ == "__main__":
         for name in files:
             file_path = os.path.join(root,name)
             img = cv2.imread(file_path)/255.0
-            
+            print(name)
             img = torch.from_numpy(img).permute(2, 0, 1).to(torch.float32).to(device).unsqueeze(0)
 
             attacked_img = PGD_Attack(img,target_img,m)
-            print(name)
+            sim = calculate_ssim(img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0,attacked_img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0)
+            psr = calculate_psnr(img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0,attacked_img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0)
+            print("sim:",sim)
+            print("psrn:",psr)
+            avg_ssim = avg_ssim + sim
+            avg_psnr = avg_psnr + psr
             img_np = attacked_img.squeeze(0).permute(1,2,0).cpu().detach().numpy()*255.0
             cv2.imwrite(output_dir+str(i) + '.png',img_np)
             i = i +1
 
+    print("SSIM:",avg_ssim/i)
+    print("PSRN:",avg_psnr/i)
