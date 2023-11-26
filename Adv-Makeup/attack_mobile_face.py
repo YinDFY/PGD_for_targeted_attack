@@ -98,7 +98,7 @@ avg_ssim = 0.0
 avg_psnr = 0.0
 if __name__ == "__main__":
     path = './before_aligned_600'
-    target_img =cv2.imread(".target_aligned_600/000141.jpg")/255.0
+    target_img =cv2.imread("./target_aligned_600/000141.jpg")/255.0
     target_img = torch.from_numpy(target_img).permute(2, 0, 1).to(torch.float32).to(device).unsqueeze(0)
     ssim_list = []
     psnr_list = []
