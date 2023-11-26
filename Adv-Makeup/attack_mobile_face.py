@@ -1,19 +1,24 @@
 # -*- coding: utf-8 -*-
 import cv2
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = '4'
 import torch
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 import torch.nn.functional as F
 import Pretrained_FR_Models.irse as irse
 import Pretrained_FR_Models.facenet as facenet
 import Pretrained_FR_Models.ir152 as ir152
 from utils import *
+"""
 if torch.cuda.is_available():
-    device = torch.device("cuda")          # 如果GPU可用，则使用CUDA
+    device = torch.device("cuda:4")         
 else:
-    device = torch.device("cpu")           # 如果GPU不可用，则使用CPU
+    device = torch.device("cpu")          
+"""
+output_dir_list = ["./mobile_face/","./facenet/","./ir152/","./irse50/"]
+model_list = [["irse50","facenet","ir152"],["irse50","mobile_face","ir152"],["irse50","mobile_face","facenet"],["ir152","mobile_face","facenet"]]
 
-output_dir = "./irse50/"
-m = ["facenet","mobile_face","ir152"]
 def cos_simi(emb_before_pasted, emb_target_img):
     """
     :param emb_before_pasted: feature embedding for the generated adv-makeup face images
@@ -56,28 +61,13 @@ def cal_target_loss(before_pasted, target_img,model_name):
     emb_target_img = fr_model(target_img_resize).detach()
 
     # Cosine loss computing
-    cos_loss = 1 -cos_simi(emb_before_pasted, emb_target_img)
+    cos_loss =  cos_simi(emb_before_pasted, emb_target_img)
     #cos_loss.requires_grad = True
     return cos_loss
 
-"""
-def PGD_Attack(img_before,target,model_name,eps=0.75,alpha = 2/255,iters = 40):
-    ori_images = img_before
-    for i in range(iters):
-        img_before.requires_grad = True
-        cosloss1 = cal_target_loss(img_before,target,"facenet")
-        cosloss2 = cal_target_loss(img_before,target,"ir152")
-        cosloss3 = cal_target_loss(img_before,target,"irse50")
-        loss = cosloss1 + cosloss2 + cosloss3
-        loss.backward()
-        eta = alpha * img_before.grad.sign()
-        eta = torch.clamp(eta,min = -eps,max = eps)
-        img_before = img_before + eta
-    print(loss)
-    return img_before
-"""
 
-def PGD_Attack(img_before, target, model_names, eps=0.1, alpha=2/255, iters=3):
+
+def PGD_Attack(img_before, target, model_names, eps=0.15, alpha=2/255, iters=20):
     img_adv = img_before.clone().detach().requires_grad_(True)
     total_loss = 0
     for i in range(iters):
@@ -107,31 +97,37 @@ def PGD_Attack(img_before, target, model_names, eps=0.1, alpha=2/255, iters=3):
 avg_ssim = 0.0
 avg_psnr = 0.0
 if __name__ == "__main__":
-    path = './Datasets_Makeup/before_aligned_600'
-    target_img =cv2.imread("./Datasets_Makeup/target_aligned_600/Camilla_Parker_Bowles_0002.jpg")/255.0
+    path = './before_aligned_600'
+    target_img =cv2.imread(".target_aligned_600/000141.jpg")/255.0
     target_img = torch.from_numpy(target_img).permute(2, 0, 1).to(torch.float32).to(device).unsqueeze(0)
-
+    ssim_list = []
+    psnr_list = []
    
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+
     i = 0
     for root,dirs,files in os.walk(path,topdown=True):
-        for name in files:
-            file_path = os.path.join(root,name)
-            img = cv2.imread(file_path)/255.0
-            print(name)
-            img = torch.from_numpy(img).permute(2, 0, 1).to(torch.float32).to(device).unsqueeze(0)
+        for index in range(4):
+            output_dir = output_dir_list[index]
+            print("Black Attack:",output_dir.split("/")[1])
+            m = model_list[index]
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            for name in files:
+                file_path = os.path.join(root,name)
+                img = cv2.imread(file_path)/255.0
+                print(name)
+                img = torch.from_numpy(img).permute(2, 0, 1).to(torch.float32).to(device).unsqueeze(0)
 
-            attacked_img = PGD_Attack(img,target_img,m)
-            sim = calculate_ssim(img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0,attacked_img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0)
-            psr = calculate_psnr(img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0,attacked_img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0)
-            print("sim:",sim)
-            print("psrn:",psr)
-            avg_ssim = avg_ssim + sim
-            avg_psnr = avg_psnr + psr
-            img_np = attacked_img.squeeze(0).permute(1,2,0).cpu().detach().numpy()*255.0
-            cv2.imwrite(output_dir+str(i) + '.png',img_np)
-            i = i +1
+                attacked_img = PGD_Attack(img,target_img,m)
+                sim = calculate_ssim(img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0,attacked_img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0)
+                psr = calculate_psnr(img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0,attacked_img.squeeze(0).permute(1,2,0).detach().cpu().numpy()*255.0)
+                avg_ssim = avg_ssim + sim
+                avg_psnr = avg_psnr + psr
+                img_np = attacked_img.squeeze(0).permute(1,2,0).cpu().detach().numpy()*255.0
+                cv2.imwrite(output_dir+str(i) + '.png',img_np)
+                i = i +1
 
-    print("SSIM:",avg_ssim/i)
+    print("SSIM:", avg_ssim / i)
+
     print("PSRN:",avg_psnr/i)
+
